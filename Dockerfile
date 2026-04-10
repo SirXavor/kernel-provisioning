@@ -2,8 +2,12 @@ FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y \
-    nginx python3 python3-flask python3-yaml \
-    && apt-get clean
+    nginx \
+    python3 \
+    python3-flask \
+    python3-yaml \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /var/www/html/ipxe \
     && mkdir -p /configs \
@@ -11,15 +15,15 @@ RUN mkdir -p /var/www/html/ipxe \
 
 # Kernel e initrd
 COPY vmlinuz /var/www/html/vmlinuz
-COPY initrd  /var/www/html/initrd
+COPY initrd /var/www/html/initrd
 
 # Scripts iPXE
 COPY ipxe/ /var/www/html/ipxe/
 
-# Servidor dinamico
-COPY server.py /app/server.py
+# Aplicación Python completa
+COPY app/ /app/
 
-# Configuracion nginx (sustituye la de defecto)
+# Configuración nginx
 COPY nginx.conf /etc/nginx/sites-available/default
 
 # Entrypoint
