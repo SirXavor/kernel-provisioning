@@ -217,6 +217,32 @@ def find_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[str, Any]:
     return {}
 
 
+def find_specific_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[str, Any]:
+    """
+    Busca SOLO un host específico por MAC.
+    No devuelve 'default'.
+    """
+    wanted_mac = normalize_mac(mac)
+
+    for doc in host_docs:
+        if host_matches_mac(doc, wanted_mac):
+            return copy.deepcopy(doc)
+
+    return {}
+
+
+def host_exists(mac: str, logger: logging.Logger | None = None) -> bool:
+    """
+    Devuelve True si existe un host específico para esa MAC.
+    No cuenta el host 'default'.
+    """
+    docs = load_all_documents(logger=logger)
+    classified = classify_documents(docs, logger=logger)
+
+    specific = find_specific_host_doc(classified["host"], mac)
+    return bool(specific)
+
+
 def find_profile_docs(
     profile_docs: List[Dict[str, Any]],
     profile_names: List[str],
@@ -287,8 +313,57 @@ def sanitize_doc_for_cloudinit(doc: Dict[str, Any]) -> Dict[str, Any]:
     """
     cleaned = copy.deepcopy(doc)
     cleaned.pop("_source_file", None)
-    cleaned = strip_internal_keys_top_level(cleaned, extra_keys={"automation", "provisioning"})
+    cleaned = strip_internal_keys_top_level(cleaned, extra_keys={"automation"})
     return cleaned
+
+
+def get_host_distro(host_cfg: Dict[str, Any]) -> str:
+    """
+    Extrae la distro objetivo desde host.provisioning.distro.
+    Si no existe, usa ubuntu por defecto.
+    """
+    provisioning = host_cfg.get("provisioning", {})
+
+    if not isinstance(provisioning, dict):
+        return "ubuntu"
+
+    distro = provisioning.get("distro", "ubuntu")
+    distro_value = str(distro).strip().lower()
+
+    return distro_value or "ubuntu"
+
+
+def doc_matches_distro(doc: Dict[str, Any], distro: str) -> bool:
+    """
+    Si el documento no define match.distro, se considera global.
+    Si lo define, debe coincidir con la distro indicada.
+    """
+    match_cfg = doc.get("match", {})
+
+    if not isinstance(match_cfg, dict):
+        return True
+
+    wanted = match_cfg.get("distro")
+    if wanted is None:
+        return True
+
+    normalized_distro = str(distro).strip().lower()
+
+    if isinstance(wanted, str):
+        return wanted.strip().lower() == normalized_distro
+
+    if isinstance(wanted, list):
+        accepted = [str(x).strip().lower() for x in wanted if str(x).strip()]
+        return normalized_distro in accepted
+
+    return False
+
+
+def filter_docs_for_distro(docs: List[Dict[str, Any]], distro: str) -> List[Dict[str, Any]]:
+    """
+    Filtra documentos aplicables a una distro concreta.
+    """
+    return [doc for doc in docs if doc_matches_distro(doc, distro)]
 
 
 def _build_config(
@@ -304,16 +379,26 @@ def _build_config(
     docs = load_all_documents(logger=logger)
     classified = classify_documents(docs, logger=logger)
 
-    final_cfg: Dict[str, Any] = {}
-
-    for doc in classified["base"]:
-        final_cfg = deep_merge(final_cfg, sanitize_fn(doc))
-
+    # 1. Host objetivo
     host_cfg = find_host_doc(classified["host"], wanted_mac)
 
+    # 2. Distro objetivo (sale del host)
+    distro = get_host_distro(host_cfg)
+
+    # 3. Filtrar bases y perfiles aplicables
+    base_docs = filter_docs_for_distro(classified["base"], distro)
+    profile_docs = filter_docs_for_distro(classified["profile"], distro)
+
+    final_cfg: Dict[str, Any] = {}
+
+    # 4. Bases
+    for doc in base_docs:
+        final_cfg = deep_merge(final_cfg, sanitize_fn(doc))
+
+    # 5. Perfiles del host
     profile_names = resolve_profiles(host_cfg)
     selected_profiles = find_profile_docs(
-        classified["profile"],
+        profile_docs,
         profile_names,
         logger=logger,
     )
@@ -321,14 +406,18 @@ def _build_config(
     for profile_doc in selected_profiles:
         final_cfg = deep_merge(final_cfg, sanitize_fn(profile_doc))
 
+    # 6. Override final del host
     final_cfg = deep_merge(final_cfg, sanitize_fn(host_cfg))
+
+    # 7. Normalización final
     final_cfg = normalize_config(final_cfg)
 
     if logger:
         logger.info(
-            "MERGED MAC=%s host=%s profiles=%s",
+            "MERGED MAC=%s host=%s distro=%s profiles=%s",
             wanted_mac,
             host_cfg.get("name", "default"),
+            distro,
             profile_names,
         )
 
@@ -385,30 +474,6 @@ def build_ansible_config(
 
     return ansible_cfg
 
-def find_specific_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[str, Any]:
-    """
-    Busca SOLO un host específico por MAC.
-    No devuelve 'default'.
-    """
-    wanted_mac = normalize_mac(mac)
-
-    for doc in host_docs:
-        if host_matches_mac(doc, wanted_mac):
-            return copy.deepcopy(doc)
-
-    return {}
-
-
-def host_exists(mac: str, logger: logging.Logger | None = None) -> bool:
-    """
-    Devuelve True si existe un host específico para esa MAC.
-    No cuenta el host 'default'.
-    """
-    docs = load_all_documents(logger=logger)
-    classified = classify_documents(docs, logger=logger)
-
-    specific = find_specific_host_doc(classified["host"], mac)
-    return bool(specific)
 
 def get_provisioning_config(mac: str, logger: logging.Logger | None = None) -> Dict[str, Any]:
     """
