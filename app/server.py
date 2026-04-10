@@ -4,6 +4,7 @@ import yaml
 from config_engine import (
     build_ansible_config,
     build_cloudinit_config,
+    build_kickstart_config,
     build_full_config,
     classify_documents,
     extract_host_macs,
@@ -18,6 +19,7 @@ from renderers.cloudinit import (
     render_vendor_data,
 )
 from renderers.ipxe import render_host_boot, render_unknown_menu
+from renderers.kickstart import render_kickstart
 
 app = Flask(__name__)
 
@@ -48,6 +50,11 @@ def ansible_by_mac(mac: str):
     yaml_text = render_ansible_yaml(cfg)
     return Response(yaml_text, mimetype="text/yaml")
 
+@app.get("/ks/<mac>.cfg")
+def kickstart_by_mac(mac: str):
+    cfg = build_kickstart_config(mac, logger=app.logger)
+    ks_text = render_kickstart(cfg)
+    return Response(ks_text, mimetype="text/plain")
 
 @app.get("/boot/<mac>")
 def boot_by_mac(mac: str):
