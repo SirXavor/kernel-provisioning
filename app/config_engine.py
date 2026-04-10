@@ -384,3 +384,40 @@ def build_ansible_config(
         ansible_cfg["network"] = copy.deepcopy(full_cfg["network"])
 
     return ansible_cfg
+
+def find_specific_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[str, Any]:
+    """
+    Busca SOLO un host específico por MAC.
+    No devuelve 'default'.
+    """
+    wanted_mac = normalize_mac(mac)
+
+    for doc in host_docs:
+        if host_matches_mac(doc, wanted_mac):
+            return copy.deepcopy(doc)
+
+    return {}
+
+
+def host_exists(mac: str, logger: logging.Logger | None = None) -> bool:
+    """
+    Devuelve True si existe un host específico para esa MAC.
+    No cuenta el host 'default'.
+    """
+    docs = load_all_documents(logger=logger)
+    classified = classify_documents(docs, logger=logger)
+
+    specific = find_specific_host_doc(classified["host"], mac)
+    return bool(specific)
+
+def get_provisioning_config(mac: str, logger: logging.Logger | None = None) -> Dict[str, Any]:
+    """
+    Devuelve solo la sección provisioning de la configuración completa.
+    """
+    full_cfg = build_full_config(mac, logger=logger)
+    provisioning = full_cfg.get("provisioning", {})
+
+    if isinstance(provisioning, dict):
+        return copy.deepcopy(provisioning)
+
+    return {}

@@ -7,6 +7,7 @@ from config_engine import (
     build_full_config,
     classify_documents,
     extract_host_macs,
+    find_specific_host_doc,
     load_all_documents,
     normalize_mac,
 )
@@ -16,8 +17,11 @@ from renderers.cloudinit import (
     render_user_data,
     render_vendor_data,
 )
+from renderers.ipxe import render_host_boot, render_unknown_menu
 
 app = Flask(__name__)
+
+BASE_URL = "http://boot.local"
 
 
 @app.get("/ds/<mac>/user-data")
@@ -43,6 +47,27 @@ def ansible_by_mac(mac: str):
     cfg = build_ansible_config(mac, logger=app.logger)
     yaml_text = render_ansible_yaml(cfg)
     return Response(yaml_text, mimetype="text/yaml")
+
+
+@app.get("/boot/<mac>")
+def boot_by_mac(mac: str):
+    """
+    Si existe host específico para la MAC, devuelve iPXE automático.
+    Si no existe, devuelve menú fallback.
+    """
+    normalized_mac = normalize_mac(mac)
+
+    docs = load_all_documents(logger=app.logger)
+    classified = classify_documents(docs, logger=app.logger)
+    host_doc = find_specific_host_doc(classified["host"], normalized_mac)
+
+    if not host_doc:
+        app.logger.info("BOOT MAC=%s host=unknown -> fallback menu", normalized_mac)
+        return Response(render_unknown_menu(BASE_URL), mimetype="text/plain")
+
+    cfg = build_full_config(normalized_mac, logger=app.logger)
+    app.logger.info("BOOT MAC=%s host=known -> automatic render", normalized_mac)
+    return Response(render_host_boot(normalized_mac, cfg, BASE_URL), mimetype="text/plain")
 
 
 @app.get("/user-data")
