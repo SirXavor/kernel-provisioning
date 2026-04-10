@@ -2,7 +2,7 @@ import copy
 import glob
 import logging
 import os
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List
 
 import yaml
 
@@ -18,6 +18,8 @@ TOP_LEVEL_INTERNAL_KEYS = {
     "roles",
     "tags",
     "identity",
+    "match",
+    "provisioning",
 }
 
 
@@ -56,14 +58,32 @@ def normalize_mac(value: str) -> str:
     return str(value).lower().replace(":", "-").strip()
 
 
+def get_cfg_distro(cfg: Dict[str, Any], default: str = "ubuntu") -> str:
+    """
+    Extrae la distro desde cfg.provisioning.distro.
+    """
+    provisioning = cfg.get("provisioning", {})
+    if not isinstance(provisioning, dict):
+        return default
+
+    distro = str(provisioning.get("distro", default)).strip().lower()
+    return distro or default
+
+
 def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Convierte claves simples del host en estructura autoinstall válida.
+    Normaliza claves simples del host según la distro objetivo.
+
+    - Ubuntu: hostname simple -> autoinstall.identity.hostname
+    - RHEL/Rocky: hostname simple se conserva para Kickstart
     """
     cfg = copy.deepcopy(cfg)
 
-    hostname = cfg.pop("hostname", None)
-    if hostname:
+    hostname = cfg.get("hostname")
+    distro = get_cfg_distro(cfg, default="ubuntu")
+
+    if hostname and distro == "ubuntu":
+        cfg.pop("hostname", None)
         cfg.setdefault("autoinstall", {})
         cfg["autoinstall"].setdefault("identity", {})
         cfg["autoinstall"]["identity"]["hostname"] = hostname
@@ -140,14 +160,6 @@ def classify_documents(
 def extract_host_macs(doc: Dict[str, Any]) -> List[str]:
     """
     Extrae y normaliza las MACs válidas de un host desde identity.mac.
-    Acepta:
-      identity:
-        mac:
-          - aa-bb-...
-          - 11:22:...
-    o
-      identity:
-        mac: aa-bb-...
     """
     identity = doc.get("identity", {})
 
@@ -191,7 +203,7 @@ def host_matches_mac(doc: Dict[str, Any], mac: str) -> bool:
 
 def find_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[str, Any]:
     """
-    Busca primero host específico por MAC (modelo nuevo o antiguo).
+    Busca primero host específico por MAC.
     Si no existe, usa host=default.
     """
     wanted_mac = normalize_mac(mac)
@@ -232,13 +244,8 @@ def find_specific_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[st
 
 
 def host_exists(mac: str, logger: logging.Logger | None = None) -> bool:
-    """
-    Devuelve True si existe un host específico para esa MAC.
-    No cuenta el host 'default'.
-    """
     docs = load_all_documents(logger=logger)
     classified = classify_documents(docs, logger=logger)
-
     specific = find_specific_host_doc(classified["host"], mac)
     return bool(specific)
 
@@ -248,9 +255,6 @@ def find_profile_docs(
     profile_names: List[str],
     logger: logging.Logger | None = None,
 ) -> List[Dict[str, Any]]:
-    """
-    Devuelve los documentos de perfil en el orden pedido.
-    """
     result = []
     profile_map = {
         str(doc.get("name", "")).strip(): doc
@@ -269,12 +273,6 @@ def find_profile_docs(
 
 
 def resolve_profiles(host_cfg: Dict[str, Any]) -> List[str]:
-    """
-    Resuelve profile/profiles del host.
-    - profiles: lista
-    - profile: string
-    - si no hay nada => ["default"]
-    """
     profiles = host_cfg.get("profiles")
     profile = host_cfg.get("profile")
 
@@ -295,48 +293,9 @@ def resolve_profiles(host_cfg: Dict[str, Any]) -> List[str]:
     return ["default"]
 
 
-def sanitize_doc_for_full_config(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Quita metadatos técnicos y claves internas del nivel superior.
-    Mantiene 'automation' porque forma parte de la config completa.
-    """
-    cleaned = copy.deepcopy(doc)
-    cleaned.pop("_source_file", None)
-    cleaned = strip_internal_keys_top_level(cleaned)
-    return cleaned
-
-
-def sanitize_doc_for_cloudinit(doc: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Igual que sanitize_doc_for_full_config, pero además elimina
-    claves que no deben salir en user-data.
-    """
-    cleaned = copy.deepcopy(doc)
-    cleaned.pop("_source_file", None)
-    cleaned = strip_internal_keys_top_level(cleaned, extra_keys={"automation", "provisioning", "match"})
-    return cleaned
-
-
-def get_host_distro(host_cfg: Dict[str, Any]) -> str:
-    """
-    Extrae la distro objetivo desde host.provisioning.distro.
-    Si no existe, usa ubuntu por defecto.
-    """
-    provisioning = host_cfg.get("provisioning", {})
-
-    if not isinstance(provisioning, dict):
-        return "ubuntu"
-
-    distro = provisioning.get("distro", "ubuntu")
-    distro_value = str(distro).strip().lower()
-
-    return distro_value or "ubuntu"
-
-
 def doc_matches_distro(doc: Dict[str, Any], distro: str) -> bool:
     """
     Si el documento no define match.distro, se considera global.
-    Si lo define, debe coincidir con la distro indicada.
     """
     match_cfg = doc.get("match", {})
 
@@ -360,42 +319,76 @@ def doc_matches_distro(doc: Dict[str, Any], distro: str) -> bool:
 
 
 def filter_docs_for_distro(docs: List[Dict[str, Any]], distro: str) -> List[Dict[str, Any]]:
-    """
-    Filtra documentos aplicables a una distro concreta.
-    """
     return [doc for doc in docs if doc_matches_distro(doc, distro)]
+
+
+def sanitize_doc_for_full_config(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Quita solo metadatos de estructura, pero conserva metadatos funcionales
+    internos como provisioning y match.
+    """
+    cleaned = copy.deepcopy(doc)
+    cleaned.pop("_source_file", None)
+
+    cleaned.pop("kind", None)
+    cleaned.pop("name", None)
+    cleaned.pop("profile", None)
+    cleaned.pop("profiles", None)
+    cleaned.pop("role", None)
+    cleaned.pop("roles", None)
+    cleaned.pop("tags", None)
+    cleaned.pop("identity", None)
+
+    return cleaned
+
+
+def sanitize_doc_for_cloudinit(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Prepara el documento para render cloud-init / autoinstall.
+    """
+    cleaned = copy.deepcopy(doc)
+    cleaned.pop("_source_file", None)
+    cleaned = strip_internal_keys_top_level(
+        cleaned,
+        extra_keys={"automation", "kickstart"},
+    )
+    return cleaned
+
+
+def sanitize_doc_for_kickstart(doc: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Prepara el documento para render Kickstart.
+    """
+    cleaned = copy.deepcopy(doc)
+    cleaned.pop("_source_file", None)
+    cleaned = strip_internal_keys_top_level(
+        cleaned,
+        extra_keys={"automation", "autoinstall"},
+    )
+    return cleaned
 
 
 def _build_config(
     mac: str,
-    sanitize_fn,
+    sanitize_fn: Callable[[Dict[str, Any]], Dict[str, Any]],
     logger: logging.Logger | None = None,
 ) -> Dict[str, Any]:
-    """
-    Constructor genérico de configuración merged.
-    """
     wanted_mac = normalize_mac(mac)
 
     docs = load_all_documents(logger=logger)
     classified = classify_documents(docs, logger=logger)
 
-    # 1. Host objetivo
     host_cfg = find_host_doc(classified["host"], wanted_mac)
+    distro = get_cfg_distro(host_cfg, default="ubuntu")
 
-    # 2. Distro objetivo (sale del host)
-    distro = get_host_distro(host_cfg)
-
-    # 3. Filtrar bases y perfiles aplicables
     base_docs = filter_docs_for_distro(classified["base"], distro)
     profile_docs = filter_docs_for_distro(classified["profile"], distro)
 
     final_cfg: Dict[str, Any] = {}
 
-    # 4. Bases
     for doc in base_docs:
         final_cfg = deep_merge(final_cfg, sanitize_fn(doc))
 
-    # 5. Perfiles del host
     profile_names = resolve_profiles(host_cfg)
     selected_profiles = find_profile_docs(
         profile_docs,
@@ -406,10 +399,7 @@ def _build_config(
     for profile_doc in selected_profiles:
         final_cfg = deep_merge(final_cfg, sanitize_fn(profile_doc))
 
-    # 6. Override final del host
     final_cfg = deep_merge(final_cfg, sanitize_fn(host_cfg))
-
-    # 7. Normalización final
     final_cfg = normalize_config(final_cfg)
 
     if logger:
@@ -428,10 +418,6 @@ def build_full_config(
     mac: str,
     logger: logging.Logger | None = None,
 ) -> Dict[str, Any]:
-    """
-    Construye la configuración merged completa para una MAC dada.
-    Incluye automation.
-    """
     return _build_config(mac, sanitize_doc_for_full_config, logger=logger)
 
 
@@ -439,20 +425,20 @@ def build_cloudinit_config(
     mac: str,
     logger: logging.Logger | None = None,
 ) -> Dict[str, Any]:
-    """
-    Construye solo la configuración destinada a cloud-init.
-    Excluye 'automation'.
-    """
     return _build_config(mac, sanitize_doc_for_cloudinit, logger=logger)
+
+
+def build_kickstart_config(
+    mac: str,
+    logger: logging.Logger | None = None,
+) -> Dict[str, Any]:
+    return _build_config(mac, sanitize_doc_for_kickstart, logger=logger)
 
 
 def build_ansible_config(
     mac: str,
     logger: logging.Logger | None = None,
 ) -> Dict[str, Any]:
-    """
-    Construye la configuración que consumirá Ansible.
-    """
     full_cfg = build_full_config(mac, logger=logger)
 
     ansible_cfg: Dict[str, Any] = {}
@@ -462,6 +448,9 @@ def build_ansible_config(
         hostname = full_cfg.get("autoinstall", {}).get("identity", {}).get("hostname")
     except Exception:
         hostname = None
+
+    if not hostname:
+        hostname = full_cfg.get("hostname")
 
     if hostname:
         ansible_cfg["hostname"] = hostname
@@ -476,9 +465,6 @@ def build_ansible_config(
 
 
 def get_provisioning_config(mac: str, logger: logging.Logger | None = None) -> Dict[str, Any]:
-    """
-    Devuelve solo la sección provisioning de la configuración completa.
-    """
     full_cfg = build_full_config(mac, logger=logger)
     provisioning = full_cfg.get("provisioning", {})
 
