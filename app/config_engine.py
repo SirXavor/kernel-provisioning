@@ -1,11 +1,10 @@
-from flask import Flask, request, Response
-import os
-import yaml
-import glob
 import copy
+import glob
+import logging
+import os
 from typing import Any, Dict, List
 
-app = Flask(__name__)
+import yaml
 
 CONFIG_DIR = "/data"
 
@@ -74,7 +73,7 @@ def normalize_config(cfg: Dict[str, Any]) -> Dict[str, Any]:
 
 def strip_internal_keys_top_level(
     cfg: Dict[str, Any],
-    extra_keys: set[str] | None = None
+    extra_keys: set[str] | None = None,
 ) -> Dict[str, Any]:
     """
     Elimina SOLO claves internas del nivel superior.
@@ -91,7 +90,7 @@ def strip_internal_keys_top_level(
     return cleaned
 
 
-def load_all_documents() -> List[Dict[str, Any]]:
+def load_all_documents(logger: logging.Logger | None = None) -> List[Dict[str, Any]]:
     """
     Carga todos los YAML de /data en plano.
     """
@@ -104,12 +103,16 @@ def load_all_documents() -> List[Dict[str, Any]]:
                 doc["_source_file"] = os.path.basename(path)
                 docs.append(doc)
         except Exception as e:
-            app.logger.exception("Error cargando %s: %s", path, e)
+            if logger:
+                logger.exception("Error cargando %s: %s", path, e)
 
     return docs
 
 
-def classify_documents(docs: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
+def classify_documents(
+    docs: List[Dict[str, Any]],
+    logger: logging.Logger | None = None,
+) -> Dict[str, List[Dict[str, Any]]]:
     """
     Clasifica documentos por kind.
     """
@@ -124,11 +127,12 @@ def classify_documents(docs: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, A
         if kind in classified:
             classified[kind].append(doc)
         else:
-            app.logger.warning(
-                "Ignorando documento sin kind válido: %s (%s)",
-                doc.get("name"),
-                doc.get("_source_file"),
-            )
+            if logger:
+                logger.warning(
+                    "Ignorando documento sin kind válido: %s (%s)",
+                    doc.get("name"),
+                    doc.get("_source_file"),
+                )
 
     return classified
 
@@ -174,12 +178,10 @@ def host_matches_mac(doc: Dict[str, Any], mac: str) -> bool:
     """
     wanted_mac = normalize_mac(mac)
 
-    # Modelo nuevo
     host_macs = extract_host_macs(doc)
     if wanted_mac in host_macs:
         return True
 
-    # Compatibilidad con modelo antiguo
     host_name = str(doc.get("name", "")).strip().lower()
     if host_name == wanted_mac:
         return True
@@ -217,7 +219,8 @@ def find_host_doc(host_docs: List[Dict[str, Any]], mac: str) -> Dict[str, Any]:
 
 def find_profile_docs(
     profile_docs: List[Dict[str, Any]],
-    profile_names: List[str]
+    profile_names: List[str],
+    logger: logging.Logger | None = None,
 ) -> List[Dict[str, Any]]:
     """
     Devuelve los documentos de perfil en el orden pedido.
@@ -233,7 +236,8 @@ def find_profile_docs(
         if doc:
             result.append(copy.deepcopy(doc))
         else:
-            app.logger.warning("Perfil no encontrado: %s", profile_name)
+            if logger:
+                logger.warning("Perfil no encontrado: %s", profile_name)
 
     return result
 
@@ -287,95 +291,80 @@ def sanitize_doc_for_cloudinit(doc: Dict[str, Any]) -> Dict[str, Any]:
     return cleaned
 
 
-def build_full_config(mac: str) -> Dict[str, Any]:
+def _build_config(
+    mac: str,
+    sanitize_fn,
+    logger: logging.Logger | None = None,
+) -> Dict[str, Any]:
+    """
+    Constructor genérico de configuración merged.
+    """
+    wanted_mac = normalize_mac(mac)
+
+    docs = load_all_documents(logger=logger)
+    classified = classify_documents(docs, logger=logger)
+
+    final_cfg: Dict[str, Any] = {}
+
+    for doc in classified["base"]:
+        final_cfg = deep_merge(final_cfg, sanitize_fn(doc))
+
+    host_cfg = find_host_doc(classified["host"], wanted_mac)
+
+    profile_names = resolve_profiles(host_cfg)
+    selected_profiles = find_profile_docs(
+        classified["profile"],
+        profile_names,
+        logger=logger,
+    )
+
+    for profile_doc in selected_profiles:
+        final_cfg = deep_merge(final_cfg, sanitize_fn(profile_doc))
+
+    final_cfg = deep_merge(final_cfg, sanitize_fn(host_cfg))
+    final_cfg = normalize_config(final_cfg)
+
+    if logger:
+        logger.info(
+            "MERGED MAC=%s host=%s profiles=%s",
+            wanted_mac,
+            host_cfg.get("name", "default"),
+            profile_names,
+        )
+
+    return final_cfg
+
+
+def build_full_config(
+    mac: str,
+    logger: logging.Logger | None = None,
+) -> Dict[str, Any]:
     """
     Construye la configuración merged completa para una MAC dada.
     Incluye automation.
     """
-    wanted_mac = normalize_mac(mac)
-
-    docs = load_all_documents()
-    classified = classify_documents(docs)
-
-    final_cfg: Dict[str, Any] = {}
-
-    # 1. Bases
-    for doc in classified["base"]:
-        final_cfg = deep_merge(final_cfg, sanitize_doc_for_full_config(doc))
-
-    # 2. Host objetivo
-    host_cfg = find_host_doc(classified["host"], wanted_mac)
-
-    # 3. Perfiles del host
-    profile_names = resolve_profiles(host_cfg)
-    selected_profiles = find_profile_docs(classified["profile"], profile_names)
-
-    for profile_doc in selected_profiles:
-        final_cfg = deep_merge(final_cfg, sanitize_doc_for_full_config(profile_doc))
-
-    # 4. Override final del host
-    final_cfg = deep_merge(final_cfg, sanitize_doc_for_full_config(host_cfg))
-
-    # 5. Normalización
-    final_cfg = normalize_config(final_cfg)
-
-    app.logger.info(
-        "FULL MAC=%s host=%s profiles=%s",
-        wanted_mac,
-        host_cfg.get("name", "default"),
-        profile_names,
-    )
-
-    return final_cfg
+    return _build_config(mac, sanitize_doc_for_full_config, logger=logger)
 
 
-def build_cloudinit_config(mac: str) -> Dict[str, Any]:
+def build_cloudinit_config(
+    mac: str,
+    logger: logging.Logger | None = None,
+) -> Dict[str, Any]:
     """
     Construye solo la configuración destinada a cloud-init.
     Excluye 'automation'.
     """
-    wanted_mac = normalize_mac(mac)
-
-    docs = load_all_documents()
-    classified = classify_documents(docs)
-
-    final_cfg: Dict[str, Any] = {}
-
-    # 1. Bases
-    for doc in classified["base"]:
-        final_cfg = deep_merge(final_cfg, sanitize_doc_for_cloudinit(doc))
-
-    # 2. Host objetivo
-    host_cfg = find_host_doc(classified["host"], wanted_mac)
-
-    # 3. Perfiles del host
-    profile_names = resolve_profiles(host_cfg)
-    selected_profiles = find_profile_docs(classified["profile"], profile_names)
-
-    for profile_doc in selected_profiles:
-        final_cfg = deep_merge(final_cfg, sanitize_doc_for_cloudinit(profile_doc))
-
-    # 4. Override final del host
-    final_cfg = deep_merge(final_cfg, sanitize_doc_for_cloudinit(host_cfg))
-
-    # 5. Normalización
-    final_cfg = normalize_config(final_cfg)
-
-    app.logger.info(
-        "CLOUDINIT MAC=%s host=%s profiles=%s",
-        wanted_mac,
-        host_cfg.get("name", "default"),
-        profile_names,
-    )
-
-    return final_cfg
+    return _build_config(mac, sanitize_doc_for_cloudinit, logger=logger)
 
 
-def build_ansible_config(mac: str) -> Dict[str, Any]:
+def build_ansible_config(
+    mac: str,
+    logger: logging.Logger | None = None,
+) -> Dict[str, Any]:
     """
     Construye la configuración que consumirá Ansible.
     """
-    full_cfg = build_full_config(mac)
+    full_cfg = build_full_config(mac, logger=logger)
 
     ansible_cfg: Dict[str, Any] = {}
 
@@ -391,110 +380,7 @@ def build_ansible_config(mac: str) -> Dict[str, Any]:
     if "automation" in full_cfg:
         ansible_cfg["automation"] = copy.deepcopy(full_cfg["automation"])
 
-    # Opcional: si más adelante quieres pasar datos de red a Ansible
     if "network" in full_cfg:
         ansible_cfg["network"] = copy.deepcopy(full_cfg["network"])
 
     return ansible_cfg
-
-
-@app.get("/ds/<mac>/user-data")
-def user_data_by_mac(mac: str):
-    cfg = build_cloudinit_config(mac)
-    yaml_text = "#cloud-config\n" + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
-    return Response(yaml_text, mimetype="text/yaml")
-
-
-@app.get("/ds/<mac>/meta-data")
-def meta_data_by_mac(mac: str):
-    normalized_mac = normalize_mac(mac)
-    cfg = build_cloudinit_config(normalized_mac)
-
-    hostname = normalized_mac
-    try:
-        hostname = cfg.get("autoinstall", {}).get("identity", {}).get("hostname", normalized_mac)
-    except Exception:
-        pass
-
-    return Response(
-        f"instance-id: iid-{normalized_mac}\nlocal-hostname: {hostname}\n",
-        mimetype="text/plain"
-    )
-
-
-@app.get("/ds/<mac>/vendor-data")
-def vendor_data_by_mac(mac: str):
-    return Response("", mimetype="text/plain")
-
-
-@app.get("/ds/<mac>/ansible")
-def ansible_by_mac(mac: str):
-    cfg = build_ansible_config(mac)
-    yaml_text = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
-    return Response(yaml_text, mimetype="text/yaml")
-
-
-@app.get("/user-data")
-def user_data():
-    mac = normalize_mac(request.args.get("mac", "default"))
-    cfg = build_cloudinit_config(mac)
-    yaml_text = "#cloud-config\n" + yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
-    return Response(yaml_text, mimetype="text/yaml")
-
-
-@app.get("/meta-data")
-def meta_data():
-    return Response("instance-id: iid-local01\n", mimetype="text/plain")
-
-
-@app.get("/debug/configs")
-def debug_configs():
-    """
-    Endpoint opcional para ver qué documentos está cargando el motor.
-    """
-    docs = load_all_documents()
-    summary = []
-    for doc in docs:
-        summary.append({
-            "file": doc.get("_source_file"),
-            "kind": doc.get("kind"),
-            "name": doc.get("name"),
-        })
-
-    yaml_text = yaml.safe_dump(summary, sort_keys=False, allow_unicode=True)
-    return Response(yaml_text, mimetype="text/yaml")
-
-
-@app.get("/debug/hosts")
-def debug_hosts():
-    """
-    Endpoint opcional para ver hosts y sus MACs resueltas.
-    """
-    docs = load_all_documents()
-    classified = classify_documents(docs)
-
-    summary = []
-    for doc in classified["host"]:
-        summary.append({
-            "file": doc.get("_source_file"),
-            "name": doc.get("name"),
-            "identity": doc.get("identity", {}),
-            "normalized_macs": extract_host_macs(doc),
-        })
-
-    yaml_text = yaml.safe_dump(summary, sort_keys=False, allow_unicode=True)
-    return Response(yaml_text, mimetype="text/yaml")
-
-
-@app.get("/debug/full-config/<mac>")
-def debug_full_config(mac: str):
-    """
-    Endpoint opcional para ver la config completa merged.
-    """
-    cfg = build_full_config(mac)
-    yaml_text = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
-    return Response(yaml_text, mimetype="text/yaml")
-
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080)
