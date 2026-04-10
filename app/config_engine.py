@@ -18,6 +18,7 @@ TOP_LEVEL_INTERNAL_KEYS = {
     "roles",
     "tags",
     "identity",
+    "provisioning",
 }
 
 
