@@ -313,7 +313,7 @@ def sanitize_doc_for_cloudinit(doc: Dict[str, Any]) -> Dict[str, Any]:
     """
     cleaned = copy.deepcopy(doc)
     cleaned.pop("_source_file", None)
-    cleaned = strip_internal_keys_top_level(cleaned, extra_keys={"automation"})
+    cleaned = strip_internal_keys_top_level(cleaned, extra_keys={"automation", "provisioning", "match"})
     return cleaned
 
 
