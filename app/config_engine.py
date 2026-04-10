@@ -363,7 +363,7 @@ def sanitize_doc_for_kickstart(doc: Dict[str, Any]) -> Dict[str, Any]:
     cleaned.pop("_source_file", None)
     cleaned = strip_internal_keys_top_level(
         cleaned,
-        extra_keys={"automation", "autoinstall"},
+        extra_keys={"automation", "autoinstall", "match", "provisioning"},
     )
     return cleaned
 
