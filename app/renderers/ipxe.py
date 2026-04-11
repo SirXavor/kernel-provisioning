@@ -1,7 +1,8 @@
 from typing import Any, Dict
 
 
-UBUNTU_SERVER = "192.168.1.70:8081"
+# En early boot mejor no depender de DNS.
+PROVISIONING_SERVER = "192.168.1.70:8081"
 
 
 def infer_installer(distro: str) -> str:
@@ -17,20 +18,31 @@ def infer_installer(distro: str) -> str:
 
 
 def render_unknown_menu(base_url: str) -> str:
-    server = UBUNTU_SERVER
-    seed = f"http://{server}/ds/default"
+    """
+    Menú fallback para MAC no registrada.
+    Ubuntu por defecto, pero deja instalar también RHEL.
+    """
+    server = PROVISIONING_SERVER
+    ubuntu_seed = f"http://{server}/ds/default"
+    rhel_version = "9"
 
     return f"""#!ipxe
 dhcp
 
 menu InfraServer Provisioning
-item ubuntu  Instalar Ubuntu 24.04
-item shell   iPXE shell
-choose target && goto ${{target}}
+item --key u ubuntu  Instalar Ubuntu 24.04
+item --key r rhel    Instalar RHEL 9
+item --key s shell   iPXE shell
+choose --default ubuntu --timeout 5000 target && goto ${{target}}
 
 :ubuntu
-kernel http://{server}/vmlinuz ip=dhcp url=http://{server}/content/ubuntu/ubuntu-24.04.4-live-server-amd64.iso autoinstall ds=nocloud;s={seed}/ ---
+kernel http://{server}/vmlinuz ip=dhcp url=http://{server}/content/ubuntu/ubuntu-24.04.4-live-server-amd64.iso autoinstall ds=nocloud;s={ubuntu_seed}/ ---
 initrd http://{server}/initrd
+boot
+
+:rhel
+kernel http://{server}/content/rhel/{rhel_version}/images/pxeboot/vmlinuz ip=dhcp inst.repo=http://{server}/content/repos/rhel/{rhel_version}/ inst.ks=http://{server}/ks/default.cfg
+initrd http://{server}/content/rhel/{rhel_version}/images/pxeboot/initrd.img
 boot
 
 :shell
@@ -39,6 +51,13 @@ shell
 
 
 def render_host_boot(mac: str, cfg: Dict[str, Any], base_url: str) -> str:
+    """
+    Devuelve el script iPXE final para un host conocido.
+
+    Reglas:
+    - Ubuntu: IP fija + flujo autoinstall ya validado
+    - RHEL/Rocky/etc: IP fija + Kickstart
+    """
     provisioning = cfg.get("provisioning", {})
     distro = str(provisioning.get("distro", "")).strip().lower()
     version = str(provisioning.get("version", "")).strip()
@@ -47,9 +66,9 @@ def render_host_boot(mac: str, cfg: Dict[str, Any], base_url: str) -> str:
         distro = "ubuntu"
 
     installer = infer_installer(distro)
+    server = PROVISIONING_SERVER
 
     if distro == "ubuntu":
-        server = UBUNTU_SERVER
         iso_name = "ubuntu-24.04.4-live-server-amd64.iso"
         seed = f"http://{server}/ds/{mac}"
 
@@ -66,8 +85,8 @@ boot
 
         return f"""#!ipxe
 dhcp
-kernel {base_url}/content/{distro_path}/{version_path}/images/pxeboot/vmlinuz ip=dhcp inst.repo={base_url}/content/repos/{distro_path}/{version_path}/ inst.ks={base_url}/ks/{mac}.cfg
-initrd {base_url}/content/{distro_path}/{version_path}/images/pxeboot/initrd.img
+kernel http://{server}/content/{distro_path}/{version_path}/images/pxeboot/vmlinuz ip=dhcp inst.repo=http://{server}/content/repos/{distro_path}/{version_path}/ inst.ks=http://{server}/ks/{mac}.cfg
+initrd http://{server}/content/{distro_path}/{version_path}/images/pxeboot/initrd.img
 boot
 """
 
