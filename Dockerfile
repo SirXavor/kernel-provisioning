@@ -18,9 +18,6 @@ RUN mkdir -p /var/www/html/ipxe \
 COPY vmlinuz /var/www/html/vmlinuz
 COPY initrd /var/www/html/initrd
 
-# Scripts iPXE
-COPY ipxe/ /var/www/html/ipxe/
-
 # Aplicación Python completa
 COPY app/ /app/
 
