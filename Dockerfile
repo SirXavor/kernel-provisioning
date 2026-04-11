@@ -10,10 +10,11 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /var/www/html/ipxe \
+    && mkdir -p /var/www/html/content \
     && mkdir -p /configs \
     && mkdir -p /app
 
-# Kernel e initrd
+# Kernel e initrd Ubuntu
 COPY vmlinuz /var/www/html/vmlinuz
 COPY initrd /var/www/html/initrd
 
