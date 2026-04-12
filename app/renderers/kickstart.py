@@ -31,11 +31,10 @@ def _render_timezone(cfg: Dict[str, Any]) -> str:
     timezone = cfg.get("timezone")
     return f"timezone {timezone}" if timezone else ""
 
-
 def _render_network(cfg: Dict[str, Any]) -> str:
     network = cfg.get("network", {})
     if not isinstance(network, dict):
-        return "network --bootproto=dhcp --device=link --activate --ipv6=off"
+        return "network --bootproto=dhcp --device=link --activate --noipv6"
 
     bootproto = str(network.get("bootproto", "dhcp")).strip().lower()
     device = str(network.get("device", "link")).strip()
