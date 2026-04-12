@@ -50,6 +50,7 @@ def ansible_by_mac(mac: str):
     yaml_text = render_ansible_yaml(cfg)
     return Response(yaml_text, mimetype="text/yaml")
 
+@app.get("/ks/<mac>")
 @app.get("/ks/<mac>.cfg")
 def kickstart_by_mac(mac: str):
     cfg = build_kickstart_config(mac, logger=app.logger)
