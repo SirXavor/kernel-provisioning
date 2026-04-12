@@ -52,7 +52,7 @@ def _render_network(cfg: Dict[str, Any]) -> str:
         parts.append("--activate")
 
     if not ipv6:
-        parts.append("--ipv6=off")
+        parts.append("--noipv6")
 
     return " ".join(parts)
 
