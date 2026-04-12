@@ -126,6 +126,13 @@ def _render_packages(cfg: Dict[str, Any]) -> str:
     lines.append("%end")
     return "\n".join(lines)
 
+def _render_reboot(cfg: Dict[str, Any]) -> str:
+    reboot = cfg.get("reboot", True)
+
+    if _bool(reboot, default=True):
+        return "reboot"
+
+    return ""
 
 def _render_ssh_post(cfg: Dict[str, Any]) -> str:
     ssh_cfg = cfg.get("ssh", {})
@@ -236,5 +243,9 @@ def render_kickstart(cfg: Dict[str, Any]) -> str:
 
     lines.append(_render_packages(kickstart))
     lines.append(_render_post(kickstart))
+
+    reboot_line = _render_reboot(kickstart)
+    if reboot_line:
+        lines.append(reboot_line)
 
     return "\n".join(lines) + "\n"
