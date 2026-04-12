@@ -16,11 +16,9 @@ def _bool(value: Any, default: bool = False) -> bool:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
-
 def _render_lang(cfg: Dict[str, Any]) -> str:
     lang = cfg.get("lang")
     return f"lang {lang}" if lang else ""
-
 
 def _render_keyboard(cfg: Dict[str, Any]) -> str:
     keyboard = cfg.get("keyboard")
