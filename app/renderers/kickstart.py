@@ -190,20 +190,14 @@ def _render_post(cfg: Dict[str, Any]) -> str:
 
     return "%post --log=/root/ks-post.log\n" + "\n\n".join(body_lines) + "\n%end"
 
-
 def _render_storage(cfg: Dict[str, Any]) -> List[str]:
-    """
-    Primer paso: storage mínimo.
-    Si luego modelas storage nativo de RHEL, se amplía aquí.
-    """
-    storage = cfg.get("storage")
-    if not storage:
-        return [
-            "zerombr",
-            "clearpart --all --initlabel",
-            "autopart",
-        ]
+    partitioning = cfg.get("partitioning")
+    if partitioning is not None:
+        text = str(partitioning).strip()
+        if text:
+            return [text]
 
+    storage = cfg.get("storage")
     if isinstance(storage, dict) and storage.get("mode") == "autopart":
         return [
             "zerombr",
@@ -211,13 +205,11 @@ def _render_storage(cfg: Dict[str, Any]) -> List[str]:
             "autopart",
         ]
 
-    # Placeholder controlado para no romper instalaciones mientras defines el modelo RHEL
     return [
         "zerombr",
         "clearpart --all --initlabel",
         "autopart",
     ]
-
 
 def render_kickstart(cfg: Dict[str, Any]) -> str:
     kickstart = cfg.get("kickstart", {})
