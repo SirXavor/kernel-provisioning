@@ -4,8 +4,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     nginx \
     python3 \
-    python3-flask \
-    python3-yaml \
+    python3-pip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -14,17 +13,12 @@ RUN mkdir -p /var/www/html/ipxe \
     && mkdir -p /configs \
     && mkdir -p /app
 
-# Kernel e initrd Ubuntu
 COPY vmlinuz /var/www/html/vmlinuz
 COPY initrd /var/www/html/initrd
-
-# Aplicación Python completa
 COPY app/ /app/
+RUN pip3 install --break-system-packages -r /app/requirements.txt
 
-# Configuración nginx
 COPY nginx.conf /etc/nginx/sites-available/default
-
-# Entrypoint
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 

@@ -3,11 +3,14 @@ from typing import Any, Dict
 import yaml
 
 from config_engine import normalize_mac
+from renderers.common import render_templates
 
 
 def render_user_data(cfg: Dict[str, Any]) -> str:
+    rendered_cfg = render_templates(cfg, cfg)
+
     return "#cloud-config\n" + yaml.safe_dump(
-        cfg,
+        rendered_cfg,
         sort_keys=False,
         allow_unicode=True,
     )

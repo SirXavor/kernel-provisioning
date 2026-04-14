@@ -1,8 +1,6 @@
 from typing import Any, Dict
 
-
-# En early boot mejor no depender de DNS.
-PROVISIONING_SERVER = "192.168.1.70:8081"
+from renderers.common import render_templates
 
 
 def infer_installer(distro: str) -> str:
@@ -17,77 +15,55 @@ def infer_installer(distro: str) -> str:
     return "unknown"
 
 
-def render_unknown_menu(base_url: str) -> str:
-    """
-    Menú fallback para MAC no registrada.
-    Ubuntu por defecto, pero deja instalar también RHEL.
-    """
-    server = PROVISIONING_SERVER
-    ubuntu_seed = f"http://{server}/ds/default"
-    rhel_version = "9"
-
-    return f"""#!ipxe
+def render_unknown_menu(cfg: Dict[str, Any]) -> str:
+    template = """#!ipxe
 dhcp
 
 menu InfraServer Provisioning
-item --key u ubuntu  Instalar Ubuntu 24.04
-item --key r rhel    Instalar RHEL 9
+item --key u ubuntu  Instalar Ubuntu
+item --key r rhel    Instalar RHEL
 item --key s shell   iPXE shell
-choose --default ubuntu --timeout 5000 target && goto ${{target}}
+choose --default ubuntu --timeout 5000 target && goto ${target}
 
 :ubuntu
-kernel http://{server}/vmlinuz ip=dhcp url=http://{server}/content/ubuntu/ubuntu-24.04.4-live-server-amd64.iso autoinstall ds=nocloud;s={ubuntu_seed}/ ---
-initrd http://{server}/initrd
+kernel http://{{ provisioning.server }}/vmlinuz ip=dhcp url=http://{{ provisioning.server }}/content/ubuntu/{{ provisioning.ubuntu_iso }} autoinstall ds=nocloud;s=http://{{ provisioning.server }}/ds/default/ ---
+initrd http://{{ provisioning.server }}/initrd
 boot
 
 :rhel
-kernel http://{server}/content/rhel/{rhel_version}/images/pxeboot/vmlinuz ip=dhcp inst.repo=http://{server}/content/repos/rhel/{rhel_version}/ inst.ks=http://{server}/ks/default.cfg
-initrd http://{server}/content/rhel/{rhel_version}/images/pxeboot/initrd.img
+kernel http://{{ provisioning.server }}/content/rhel/{{ provisioning.version }}/images/pxeboot/vmlinuz ip=dhcp inst.repo=http://{{ provisioning.server }}/content/repos/rhel/{{ provisioning.version }}/ inst.ks=http://{{ provisioning.server }}/ks/default.cfg
+initrd http://{{ provisioning.server }}/content/rhel/{{ provisioning.version }}/images/pxeboot/initrd.img
 boot
 
 :shell
 shell
 """
+    return render_templates(template, cfg)
 
 
-def render_host_boot(mac: str, cfg: Dict[str, Any], base_url: str) -> str:
-    """
-    Devuelve el script iPXE final para un host conocido.
-
-    Reglas:
-    - Ubuntu: IP fija + flujo autoinstall ya validado
-    - RHEL/Rocky/etc: IP fija + Kickstart
-    """
+def render_host_boot(mac: str, cfg: Dict[str, Any]) -> str:
     provisioning = cfg.get("provisioning", {})
-    distro = str(provisioning.get("distro", "")).strip().lower()
-    version = str(provisioning.get("version", "")).strip()
-
-    if not distro:
-        distro = "ubuntu"
+    distro = str(provisioning.get("distro", "ubuntu")).strip().lower()
+    version = str(provisioning.get("version", "9")).strip()
 
     installer = infer_installer(distro)
-    server = PROVISIONING_SERVER
 
     if distro == "ubuntu":
-        iso_name = "ubuntu-24.04.4-live-server-amd64.iso"
-        seed = f"http://{server}/ds/{mac}"
-
-        return f"""#!ipxe
+        template = """#!ipxe
 dhcp
-kernel http://{server}/vmlinuz ip=dhcp url=http://{server}/content/ubuntu/{iso_name} autoinstall ds=nocloud;s={seed}/ ---
-initrd http://{server}/initrd
+kernel http://{{ provisioning.server }}/vmlinuz ip=dhcp url=http://{{ provisioning.server }}/content/ubuntu/{{ provisioning.ubuntu_iso }} autoinstall ds=nocloud;s=http://{{ provisioning.server }}/ds/{{ mac }}/ ---
+initrd http://{{ provisioning.server }}/initrd
 boot
 """
+        return render_templates(template, {**cfg, "mac": mac})
 
     if installer == "kickstart":
-        distro_path = distro
-        version_path = version or "9"
-
-        return f"""#!ipxe
+        template = """#!ipxe
 dhcp
-kernel http://{server}/content/{distro_path}/{version_path}/images/pxeboot/vmlinuz ip=dhcp inst.repo=http://{server}/content/repos/{distro_path}/{version_path}/ inst.ks=http://{server}/ks/{mac}.cfg
-initrd http://{server}/content/{distro_path}/{version_path}/images/pxeboot/initrd.img
+kernel http://{{ provisioning.server }}/content/{{ provisioning.distro }}/{{ provisioning.version }}/images/pxeboot/vmlinuz ip=dhcp inst.repo=http://{{ provisioning.server }}/content/repos/{{ provisioning.distro }}/{{ provisioning.version }}/ inst.ks=http://{{ provisioning.server }}/ks/{{ mac }}.cfg
+initrd http://{{ provisioning.server }}/content/{{ provisioning.distro }}/{{ provisioning.version }}/images/pxeboot/initrd.img
 boot
 """
+        return render_templates(template, {**cfg, "mac": mac})
 
-    return render_unknown_menu(base_url)
+    return render_unknown_menu(cfg)

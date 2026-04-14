@@ -1,5 +1,7 @@
 from typing import Any, Dict, List
 
+from renderers.common import render_templates
+
 
 def _as_list(value: Any) -> List[Any]:
     if value is None:
@@ -16,9 +18,11 @@ def _bool(value: Any, default: bool = False) -> bool:
         return default
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+
 def _render_lang(cfg: Dict[str, Any]) -> str:
     lang = cfg.get("lang")
     return f"lang {lang}" if lang else ""
+
 
 def _render_keyboard(cfg: Dict[str, Any]) -> str:
     keyboard = cfg.get("keyboard")
@@ -28,6 +32,7 @@ def _render_keyboard(cfg: Dict[str, Any]) -> str:
 def _render_timezone(cfg: Dict[str, Any]) -> str:
     timezone = cfg.get("timezone")
     return f"timezone {timezone}" if timezone else ""
+
 
 def _render_network(cfg: Dict[str, Any]) -> str:
     network = cfg.get("network", {})
@@ -126,6 +131,7 @@ def _render_packages(cfg: Dict[str, Any]) -> str:
     lines.append("%end")
     return "\n".join(lines)
 
+
 def _render_reboot(cfg: Dict[str, Any]) -> str:
     reboot = cfg.get("reboot", True)
 
@@ -133,6 +139,7 @@ def _render_reboot(cfg: Dict[str, Any]) -> str:
         return "reboot"
 
     return ""
+
 
 def _render_ssh_post(cfg: Dict[str, Any]) -> str:
     ssh_cfg = cfg.get("ssh", {})
@@ -190,6 +197,7 @@ def _render_post(cfg: Dict[str, Any]) -> str:
 
     return "%post --log=/root/ks-post.log\n" + "\n\n".join(body_lines) + "\n%end"
 
+
 def _render_storage(cfg: Dict[str, Any]) -> List[str]:
     partitioning = cfg.get("partitioning")
     if partitioning is not None:
@@ -211,10 +219,14 @@ def _render_storage(cfg: Dict[str, Any]) -> List[str]:
         "autopart",
     ]
 
+
 def render_kickstart(cfg: Dict[str, Any]) -> str:
     kickstart = cfg.get("kickstart", {})
     if not isinstance(kickstart, dict):
         kickstart = {}
+
+    # Renderiza templates Jinja2 dentro del bloque kickstart usando el config completo
+    kickstart = render_templates(kickstart, cfg)
 
     lines: List[str] = []
 
@@ -232,7 +244,6 @@ def render_kickstart(cfg: Dict[str, Any]) -> str:
             lines.append(item)
 
     lines.extend(_render_storage(kickstart))
-
     lines.append(_render_packages(kickstart))
     lines.append(_render_post(kickstart))
 
