@@ -23,8 +23,6 @@ from renderers.kickstart import render_kickstart
 
 app = Flask(__name__)
 
-BASE_URL = "http://boot.local"
-
 
 @app.get("/ds/<mac>/user-data")
 def user_data_by_mac(mac: str):
@@ -50,6 +48,7 @@ def ansible_by_mac(mac: str):
     yaml_text = render_ansible_yaml(cfg)
     return Response(yaml_text, mimetype="text/yaml")
 
+
 @app.get("/ks/<mac>")
 @app.get("/ks/<mac>.cfg")
 def kickstart_by_mac(mac: str):
@@ -57,7 +56,9 @@ def kickstart_by_mac(mac: str):
     ks_text = render_kickstart(cfg)
     return Response(ks_text, mimetype="text/plain")
 
+
 @app.get("/boot/<mac>")
+@app.get("/boot/<mac>.cfg")
 def boot_by_mac(mac: str):
     """
     Si existe host específico para la MAC, devuelve iPXE automático.
@@ -71,11 +72,20 @@ def boot_by_mac(mac: str):
 
     if not host_doc:
         app.logger.info("BOOT MAC=%s host=unknown -> fallback menu", normalized_mac)
-        return Response(render_unknown_menu(BASE_URL), mimetype="text/plain")
+
+        # contexto mínimo para menú por defecto
+        fallback_cfg = {
+            "provisioning": {
+                "server": "192.168.1.70:8081",
+                "version": "9",
+                "ubuntu_iso": "ubuntu-24.04.4-live-server-amd64.iso",
+            }
+        }
+        return Response(render_unknown_menu(cfg=fallback_cfg), mimetype="text/plain")
 
     cfg = build_full_config(normalized_mac, logger=app.logger)
     app.logger.info("BOOT MAC=%s host=known -> automatic render", normalized_mac)
-    return Response(render_host_boot(normalized_mac, cfg, BASE_URL), mimetype="text/plain")
+    return Response(render_host_boot(normalized_mac, cfg), mimetype="text/plain")
 
 
 @app.get("/user-data")
